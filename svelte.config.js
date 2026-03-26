@@ -10,7 +10,7 @@ export default {
       fallback: 'index.html'
     }),
     paths: {
-      base: '/Pokonyan-OBSObstruction-Plugin'
+      base: '/universal-converter2'
     }
   }
 };
