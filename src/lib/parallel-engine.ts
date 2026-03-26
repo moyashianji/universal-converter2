@@ -11,6 +11,7 @@
  */
 
 import { decodeImageFast, isImageDecoderSupported, batchDecodeImages } from './image-decoder';
+import { encodeWavToBuffer } from './wav-encoder';
 
 // Detect optimal concurrency
 const HARDWARE_CONCURRENCY = typeof navigator !== 'undefined'
@@ -133,77 +134,14 @@ self.onmessage = async (e) => {
 };
 `;
 
-// Audio processing worker script
-const AUDIO_WORKER_SCRIPT = `
-self.onmessage = async (e) => {
-	const { audioData, sampleRate, channels, format } = e.data;
-
-	try {
-		const samples = new Float32Array(audioData);
-		let result;
-
-		if (format === 'wav') {
-			// Optimized WAV encoding with single buffer allocation
-			const numSamples = samples.length;
-			const bytesPerSample = 2;
-			const dataSize = numSamples * bytesPerSample;
-			const buffer = new ArrayBuffer(44 + dataSize);
-			const view = new DataView(buffer);
-
-			// WAV header (optimized writes)
-			const setString = (offset, str) => {
-				for (let i = 0; i < str.length; i++) {
-					view.setUint8(offset + i, str.charCodeAt(i));
-				}
-			};
-
-			setString(0, 'RIFF');
-			view.setUint32(4, 36 + dataSize, true);
-			setString(8, 'WAVE');
-			setString(12, 'fmt ');
-			view.setUint32(16, 16, true);
-			view.setUint16(20, 1, true);
-			view.setUint16(22, channels, true);
-			view.setUint32(24, sampleRate, true);
-			view.setUint32(28, sampleRate * channels * bytesPerSample, true);
-			view.setUint16(32, channels * bytesPerSample, true);
-			view.setUint16(34, 16, true);
-			setString(36, 'data');
-			view.setUint32(40, dataSize, true);
-
-			// Convert samples - use Int16Array for direct write
-			const int16 = new Int16Array(buffer, 44);
-			for (let i = 0; i < numSamples; i++) {
-				const s = Math.max(-1, Math.min(1, samples[i]));
-				int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-			}
-
-			result = buffer;
-		}
-
-		self.postMessage({ result }, [result]);
-	} catch (error) {
-		self.postMessage({ error: error.message });
-	}
-};
-`;
-
-// Singleton worker pools
+// Singleton worker pool
 let imageWorkerPool: WorkerPool | null = null;
-let audioWorkerPool: WorkerPool | null = null;
 
 function getImageWorkerPool(): WorkerPool {
 	if (!imageWorkerPool) {
 		imageWorkerPool = new WorkerPool(IMAGE_WORKER_SCRIPT);
 	}
 	return imageWorkerPool;
-}
-
-function getAudioWorkerPool(): WorkerPool {
-	if (!audioWorkerPool) {
-		audioWorkerPool = new WorkerPool(AUDIO_WORKER_SCRIPT);
-	}
-	return audioWorkerPool;
 }
 
 /**
@@ -255,41 +193,16 @@ export async function processImageParallel(
 }
 
 /**
- * Process audio in parallel using worker pool
+ * Process audio using shared WAV encoder (main thread, optimized)
+ * Falls back to worker pool for very large buffers
  */
 export async function processAudioParallel(
 	audioBuffer: AudioBuffer,
 	format: string
 ): Promise<Blob> {
-	// Merge channels to mono or interleave stereo
-	const channels = audioBuffer.numberOfChannels;
-	const sampleRate = audioBuffer.sampleRate;
-	const length = audioBuffer.length;
-
-	let samples: Float32Array;
-
-	if (channels === 1) {
-		samples = audioBuffer.getChannelData(0);
-	} else {
-		// Interleave stereo channels
-		samples = new Float32Array(length * channels);
-		const left = audioBuffer.getChannelData(0);
-		const right = audioBuffer.getChannelData(1);
-		for (let i = 0; i < length; i++) {
-			samples[i * 2] = left[i];
-			samples[i * 2 + 1] = right[i];
-		}
-	}
-
-	const pool = getAudioWorkerPool();
-	const result = await pool.execute<ArrayBuffer>({
-		audioData: samples.buffer,
-		sampleRate,
-		channels,
-		format
-	});
-
-	return new Blob([result], { type: 'audio/wav' });
+	// Use shared encoder directly (already optimized with mono/stereo fast paths)
+	const buffer = encodeWavToBuffer(audioBuffer);
+	return new Blob([buffer], { type: 'audio/wav' });
 }
 
 /**
@@ -451,7 +364,5 @@ export function getProcessingStats(): {
  */
 export function cleanupWorkerPools() {
 	imageWorkerPool?.terminate();
-	audioWorkerPool?.terminate();
 	imageWorkerPool = null;
-	audioWorkerPool = null;
 }

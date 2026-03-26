@@ -1,8 +1,13 @@
 /**
  * WebCodecs API Video Converter
- * Hardware-accelerated, zero download, GPU-powered
- * 10-100x faster than FFmpeg.wasm for supported formats
+ *
+ * Currently uses Canvas + captureStream + MediaRecorder for muxing.
+ * True WebCodecs encoding (VideoEncoder/VideoDecoder) is checked for
+ * availability and used for codec probing, but full encode pipelines
+ * require a muxer (not yet implemented).
  */
+
+import { encodeWav } from './wav-encoder';
 
 export type WebCodecsFormat = 'mp4' | 'webm';
 
@@ -72,7 +77,7 @@ export async function convertVideoWithWebCodecs(
 		throw new Error('WebCodecs APIはこのブラウザでサポートされていません');
 	}
 
-	onProgress?.(5, 'ハードウェアエンコーダーを初期化中...');
+	onProgress?.(5, 'エンコーダーを初期化中...');
 
 	const {
 		bitrate = 5_000_000,
@@ -134,7 +139,7 @@ export async function convertVideoWithWebCodecs(
 		// No audio or failed
 	}
 
-	onProgress?.(15, 'GPUエンコード開始...');
+	onProgress?.(15, 'エンコード開始...');
 
 	const recorder = new MediaRecorder(stream, {
 		mimeType: MediaRecorder.isTypeSupported(mimeType) ? mimeType : 'video/webm',
@@ -169,7 +174,7 @@ export async function convertVideoWithWebCodecs(
 		const progress = Math.min((video.currentTime / duration) * 80 + 15, 95);
 		const elapsed = (performance.now() - startTime) / 1000;
 		const speed = video.currentTime / elapsed;
-		onProgress?.(progress, `GPUエンコード中... ${speed.toFixed(1)}x速`);
+		onProgress?.(progress, `エンコード中... ${speed.toFixed(1)}x速`);
 
 		requestAnimationFrame(render);
 	};
@@ -209,8 +214,7 @@ export async function extractAudioFast(
 
 	onProgress?.(60, 'エンコード中...');
 
-	// Convert to WAV (fastest, lossless)
-	const wav = audioBufferToWav(audioBuffer);
+	const wav = encodeWav(audioBuffer);
 
 	await audioCtx.close();
 
@@ -221,55 +225,6 @@ export async function extractAudioFast(
 		blob: wav,
 		fileName: `${baseName}.wav`
 	};
-}
-
-function audioBufferToWav(buffer: AudioBuffer): Blob {
-	const numChannels = buffer.numberOfChannels;
-	const sampleRate = buffer.sampleRate;
-	const format = 1;
-	const bitDepth = 16;
-	const bytesPerSample = bitDepth / 8;
-	const blockAlign = numChannels * bytesPerSample;
-	const dataSize = buffer.length * blockAlign;
-
-	const arrayBuffer = new ArrayBuffer(44 + dataSize);
-	const view = new DataView(arrayBuffer);
-
-	const writeString = (offset: number, str: string) => {
-		for (let i = 0; i < str.length; i++) {
-			view.setUint8(offset + i, str.charCodeAt(i));
-		}
-	};
-
-	writeString(0, 'RIFF');
-	view.setUint32(4, 36 + dataSize, true);
-	writeString(8, 'WAVE');
-	writeString(12, 'fmt ');
-	view.setUint32(16, 16, true);
-	view.setUint16(20, format, true);
-	view.setUint16(22, numChannels, true);
-	view.setUint32(24, sampleRate, true);
-	view.setUint32(28, sampleRate * blockAlign, true);
-	view.setUint16(32, blockAlign, true);
-	view.setUint16(34, bitDepth, true);
-	writeString(36, 'data');
-	view.setUint32(40, dataSize, true);
-
-	const channels: Float32Array[] = [];
-	for (let i = 0; i < numChannels; i++) {
-		channels.push(buffer.getChannelData(i));
-	}
-
-	let offset = 44;
-	for (let i = 0; i < buffer.length; i++) {
-		for (let ch = 0; ch < numChannels; ch++) {
-			const sample = Math.max(-1, Math.min(1, channels[ch][i]));
-			view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
-			offset += 2;
-		}
-	}
-
-	return new Blob([arrayBuffer], { type: 'audio/wav' });
 }
 
 /**

@@ -9,6 +9,8 @@
  * Zero external dependencies for WAV
  */
 
+import { encodeWav } from './wav-encoder';
+
 export type AudioFormat = 'wav' | 'webm' | 'mp3' | 'ogg' | 'm4a' | 'opus';
 
 export interface AudioConversionOptions {
@@ -61,8 +63,7 @@ export async function convertAudio(
 	let blob: Blob;
 
 	if (targetFormat === 'wav') {
-		// Fast WAV encoding (native, no dependencies)
-		blob = encodeWavFast(audioBuffer);
+		blob = encodeWav(audioBuffer);
 		onProgress?.(90);
 	} else {
 		// Use MediaRecorder for other formats
@@ -74,65 +75,6 @@ export async function convertAudio(
 
 	const baseName = file.name.replace(/\.[^/.]+$/, '');
 	return { blob, fileName: `${baseName}.${targetFormat}` };
-}
-
-/**
- * Ultra-fast WAV encoding using TypedArrays
- * Optimized for speed with minimal memory allocation
- */
-function encodeWavFast(audioBuffer: AudioBuffer): Blob {
-	const numChannels = audioBuffer.numberOfChannels;
-	const sampleRate = audioBuffer.sampleRate;
-	const length = audioBuffer.length;
-	const bytesPerSample = 2; // 16-bit
-	const blockAlign = numChannels * bytesPerSample;
-	const dataSize = length * blockAlign;
-	const bufferSize = 44 + dataSize;
-
-	// Single allocation for entire file
-	const buffer = new ArrayBuffer(bufferSize);
-	const view = new DataView(buffer);
-
-	// WAV header (44 bytes)
-	// RIFF chunk
-	view.setUint32(0, 0x52494646, false); // "RIFF"
-	view.setUint32(4, bufferSize - 8, true); // File size - 8
-	view.setUint32(8, 0x57415645, false); // "WAVE"
-
-	// fmt chunk
-	view.setUint32(12, 0x666D7420, false); // "fmt "
-	view.setUint32(16, 16, true); // Chunk size
-	view.setUint16(20, 1, true); // PCM format
-	view.setUint16(22, numChannels, true);
-	view.setUint32(24, sampleRate, true);
-	view.setUint32(28, sampleRate * blockAlign, true); // Byte rate
-	view.setUint16(32, blockAlign, true);
-	view.setUint16(34, 16, true); // Bits per sample
-
-	// data chunk
-	view.setUint32(36, 0x64617461, false); // "data"
-	view.setUint32(40, dataSize, true);
-
-	// Get channel data
-	const channels: Float32Array[] = [];
-	for (let ch = 0; ch < numChannels; ch++) {
-		channels.push(audioBuffer.getChannelData(ch));
-	}
-
-	// Interleave and convert to 16-bit PCM
-	// Use Int16Array view for faster writing
-	const samples = new Int16Array(buffer, 44);
-	let idx = 0;
-
-	for (let i = 0; i < length; i++) {
-		for (let ch = 0; ch < numChannels; ch++) {
-			// Clamp and convert to 16-bit
-			const sample = Math.max(-1, Math.min(1, channels[ch][i]));
-			samples[idx++] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-		}
-	}
-
-	return new Blob([buffer], { type: 'audio/wav' });
 }
 
 async function encodeWithMediaRecorder(

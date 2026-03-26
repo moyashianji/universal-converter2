@@ -21,6 +21,11 @@ import {
 	WEBCODECS_IMAGE_OUTPUTS
 } from './webcodecs-converter';
 import {
+	isPipelineSupported,
+	isPipelineCompatible,
+	convertWithPipeline
+} from './webcodecs-pipeline';
+import {
 	initFFmpeg,
 	convertWithFFmpeg,
 	isFFmpegAvailable,
@@ -32,7 +37,7 @@ import { COMMON_IMAGE_OUTPUTS, COMMON_VIDEO_OUTPUTS, COMMON_AUDIO_OUTPUTS } from
 
 export type FileType = 'image' | 'audio' | 'video' | 'document' | null;
 export type ConversionStatus = 'idle' | 'loading' | 'converting' | 'complete' | 'error';
-export type ConversionMethod = 'webcodecs' | 'canvas' | 'webaudio' | 'ffmpeg';
+export type ConversionMethod = 'pipeline' | 'webcodecs' | 'canvas' | 'webaudio' | 'ffmpeg';
 
 export interface ConversionState {
 	status: ConversionStatus;
@@ -116,20 +121,32 @@ export function getOutputFormats(fileType: FileType): string[] {
 }
 
 // Determine best conversion method
-function selectBestMethod(fileType: FileType, outputFormat: string): ConversionMethod {
-	const webCodecsAvailable = isWebCodecsSupported();
+// file parameter is needed for pipeline compatibility check
+function selectBestMethod(fileType: FileType, outputFormat: string, file?: File): ConversionMethod {
+	const pipelineAvailable = isPipelineSupported();
 
 	// Images: always Canvas (fastest)
 	if (fileType === 'image') {
 		return 'canvas';
 	}
 
-	// Video to video: prefer WebCodecs
-	if (fileType === 'video' && ['mp4', 'webm'].includes(outputFormat) && webCodecsAvailable) {
+	// Video to video (MP4/WebM): prefer true WebCodecs pipeline (10-100x faster)
+	// Pipeline requires MP4/MOV input (ISO BMFF container)
+	if (
+		fileType === 'video' &&
+		['mp4', 'webm'].includes(outputFormat) &&
+		pipelineAvailable &&
+		file && isPipelineCompatible(file)
+	) {
+		return 'pipeline';
+	}
+
+	// Video to video: fallback to Canvas+MediaRecorder approach
+	if (fileType === 'video' && ['mp4', 'webm'].includes(outputFormat) && isWebCodecsSupported()) {
 		return 'webcodecs';
 	}
 
-	// Video to image: WebCodecs frame extraction
+	// Video to image: frame extraction
 	if (fileType === 'video' && ['png', 'jpg', 'webp'].includes(outputFormat)) {
 		return 'webcodecs';
 	}
@@ -150,10 +167,11 @@ export async function convertFile(
 	onProgress?: ProgressCallback
 ): Promise<{ url: string; fileName: string }> {
 	const fileType = detectFileType(file);
-	const method = selectBestMethod(fileType, outputFormat);
+	const method = selectBestMethod(fileType, outputFormat, file);
 
 	const methodNames: Record<ConversionMethod, string> = {
-		webcodecs: 'GPU高速',
+		pipeline: 'WebCodecs Pipeline',
+		webcodecs: 'WebCodecs',
 		canvas: 'ネイティブ',
 		webaudio: 'ネイティブ',
 		ffmpeg: 'FFmpeg'
@@ -170,20 +188,29 @@ export async function convertFile(
 		let result: { blob: Blob; fileName: string };
 
 		switch (method) {
+			case 'pipeline':
+				// True WebCodecs pipeline (GPU decode → encode, 10-100x faster)
+				result = await convertWithPipeline(
+					file,
+					outputFormat as 'mp4' | 'webm',
+					{},
+					(p) => {
+						onProgress?.({ progress: p.progress, message: p.message, method: 'pipeline' });
+					}
+				);
+				break;
+
 			case 'canvas':
-				// Image conversion with Canvas API
 				onProgress?.({ progress: 10, message: '画像を処理中... (Canvas API)' });
 				result = await convertImage(file, outputFormat as any);
 				break;
 
 			case 'webcodecs':
 				if (['png', 'jpg', 'webp'].includes(outputFormat)) {
-					// Frame extraction
 					result = await extractFrameFast(file, 1, outputFormat as any, (progress, message) => {
-						onProgress?.({ progress, message: `${message} (GPU)` });
+						onProgress?.({ progress, message: `${message} (WebCodecs)` });
 					});
 				} else {
-					// Video conversion
 					result = await convertVideoWithWebCodecs(
 						file,
 						outputFormat as any,
@@ -196,14 +223,12 @@ export async function convertFile(
 				break;
 
 			case 'webaudio':
-				// Audio extraction/conversion
 				result = await extractAudioFast(file, (progress, message) => {
 					onProgress?.({ progress, message: `${message} (Web Audio)` });
 				});
 				break;
 
 			case 'ffmpeg':
-				// Full format support with FFmpeg
 				if (!isFFmpegAvailable()) {
 					throw new Error('この形式の変換にはFFmpegが必要ですが、ブラウザがサポートしていません');
 				}

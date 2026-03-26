@@ -3,6 +3,9 @@
  * Supports: WebM, MP4 (where available), GIF, extracting frames/audio
  */
 
+import { encodeWav } from './wav-encoder';
+import { isFFmpegAvailable, convertWithFFmpeg } from './ffmpeg-converter';
+
 export type VideoFormat = 'webm' | 'mp4' | 'gif';
 export type VideoOutputType = 'video' | 'audio' | 'image';
 
@@ -78,13 +81,13 @@ export async function convertVideo(
 	}
 
 	if (format === 'gif') {
-		blob = await videoToGif(video, {
-			width: Math.min(targetWidth, 480), // Limit GIF size
+		blob = await videoToGif(file, {
+			width: Math.min(targetWidth, 480),
 			height: Math.min(targetHeight, 480),
 			frameRate: Math.min(frameRate, 15),
 			quality,
 			startTime,
-			duration: duration || Math.min(video.duration - startTime, 10) // Max 10 seconds
+			duration: duration || Math.min(video.duration - startTime, 10)
 		}, onProgress);
 	} else {
 		blob = await transcodeVideo(video, format, {
@@ -160,57 +163,12 @@ async function extractAudio(
 
 	onProgress?.(70);
 
-	// Convert to WAV
-	const numChannels = audioBuffer.numberOfChannels;
-	const sampleRate = audioBuffer.sampleRate;
-	const bitDepth = 16;
-	const bytesPerSample = bitDepth / 8;
-	const blockAlign = numChannels * bytesPerSample;
-	const samples = audioBuffer.length;
-	const dataSize = samples * blockAlign;
-
-	const buffer = new ArrayBuffer(44 + dataSize);
-	const view = new DataView(buffer);
-
-	// WAV header
-	const writeString = (offset: number, str: string) => {
-		for (let i = 0; i < str.length; i++) {
-			view.setUint8(offset + i, str.charCodeAt(i));
-		}
-	};
-
-	writeString(0, 'RIFF');
-	view.setUint32(4, 36 + dataSize, true);
-	writeString(8, 'WAVE');
-	writeString(12, 'fmt ');
-	view.setUint32(16, 16, true);
-	view.setUint16(20, 1, true);
-	view.setUint16(22, numChannels, true);
-	view.setUint32(24, sampleRate, true);
-	view.setUint32(28, sampleRate * blockAlign, true);
-	view.setUint16(32, blockAlign, true);
-	view.setUint16(34, bitDepth, true);
-	writeString(36, 'data');
-	view.setUint32(40, dataSize, true);
-
-	const channels: Float32Array[] = [];
-	for (let i = 0; i < numChannels; i++) {
-		channels.push(audioBuffer.getChannelData(i));
-	}
-
-	let offset = 44;
-	for (let i = 0; i < samples; i++) {
-		for (let ch = 0; ch < numChannels; ch++) {
-			const sample = Math.max(-1, Math.min(1, channels[ch][i]));
-			view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
-			offset += 2;
-		}
-	}
+	const blob = encodeWav(audioBuffer);
 
 	await audioContext.close();
 	onProgress?.(90);
 
-	return new Blob([buffer], { type: 'audio/wav' });
+	return blob;
 }
 
 interface GifOptions {
@@ -223,52 +181,51 @@ interface GifOptions {
 }
 
 async function videoToGif(
-	video: HTMLVideoElement,
+	file: File,
 	options: GifOptions,
 	onProgress?: (progress: number) => void
 ): Promise<Blob> {
-	const { width, height, frameRate, startTime, duration } = options;
+	// Use FFmpeg for high-quality animated GIF with palette optimization
+	if (isFFmpegAvailable()) {
+		const result = await convertWithFFmpeg(file, 'gif', (progress, message) => {
+			onProgress?.(20 + progress * 0.75);
+		});
+		onProgress?.(95);
+		return result.blob;
+	}
+
+	// Fallback: extract a single frame as static GIF via Canvas
+	const { width, height, startTime } = options;
+
+	const video = document.createElement('video');
+	video.muted = true;
+	video.playsInline = true;
+	video.src = URL.createObjectURL(file);
+
+	await new Promise<void>((resolve) => {
+		video.onloadedmetadata = () => resolve();
+	});
+
+	video.currentTime = startTime;
+	await new Promise<void>((resolve) => {
+		video.onseeked = () => resolve();
+	});
 
 	const canvas = document.createElement('canvas');
 	canvas.width = width;
 	canvas.height = height;
 	const ctx = canvas.getContext('2d')!;
+	ctx.drawImage(video, 0, 0, width, height);
 
-	const frames: Blob[] = [];
-	const frameInterval = 1 / frameRate;
-	const totalFrames = Math.floor(duration * frameRate);
-
-	for (let i = 0; i < totalFrames; i++) {
-		const time = startTime + i * frameInterval;
-		video.currentTime = time;
-
-		await new Promise<void>((resolve) => {
-			video.onseeked = () => resolve();
-		});
-
-		ctx.drawImage(video, 0, 0, width, height);
-
-		const frameBlob = await new Promise<Blob>((resolve) => {
-			canvas.toBlob((blob) => resolve(blob!), 'image/png');
-		});
-		frames.push(frameBlob);
-
-		onProgress?.(20 + (i / totalFrames) * 70);
-	}
-
-	// Create animated GIF using canvas frames
-	// Note: This creates individual frames - for a proper GIF, you'd need gif.js library
-	// For now, we return the first frame as a static image
-	// To support animated GIF, we would need to add gif.js dependency
-
+	URL.revokeObjectURL(video.src);
 	onProgress?.(95);
 
-	// Return as WebP animation or first frame
-	if (frames.length > 0) {
-		return frames[0]; // Static GIF fallback
-	}
-
-	throw new Error('No frames captured');
+	return new Promise<Blob>((resolve, reject) => {
+		canvas.toBlob((blob) => {
+			if (blob) resolve(blob);
+			else reject(new Error('フレームのキャプチャに失敗しました'));
+		}, 'image/gif');
+	});
 }
 
 interface TranscodeOptions {
