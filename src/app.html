@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ja">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' rx='20' width='100' height='100'/><text x='50' y='70' text-anchor='middle' fill='white' font-size='50' font-family='sans-serif'>UC</text></svg>" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="description" content="Universal Converter - 高速なブラウザ内ファイル変換ツール" />
+		%sveltekit.head%
+	</head>
+	<body data-sveltekit-preload-data="hover">
+		<div style="display: contents">%sveltekit.body%</div>
+		<script>
+			// Register Service Worker for COOP/COEP headers (enables SharedArrayBuffer for FFmpeg.wasm)
+			if ('serviceWorker' in navigator) {
+				navigator.serviceWorker.register('%sveltekit.assets%/sw.js', { scope: '/' })
+					.then(() => {
+						// Check if we need to reload for headers to take effect
+						if (!crossOriginIsolated) {
+							// Reload once to apply headers
+							if (!sessionStorage.getItem('coi-reloaded')) {
+								sessionStorage.setItem('coi-reloaded', 'true');
+								window.location.reload();
+							}
+						}
+					})
+					.catch(console.error);
+			}
+		</script>
+	</body>
+</html>

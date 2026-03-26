@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://moyashianji.github.io/Pokonyan-OBSObstruction-Plugin/sitemap.xml

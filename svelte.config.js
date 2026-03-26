@@ -8,6 +8,9 @@ export default {
       pages: 'build',
       assets: 'build',
       fallback: 'index.html'
-    })
+    }),
+    paths: {
+      base: '/Pokonyan-OBSObstruction-Plugin'
+    }
   }
 };

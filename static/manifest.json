@@ -1,0 +1,63 @@
+{
+  "name": "Universal Converter",
+  "short_name": "Converter",
+  "description": "ブラウザで完結する超高速ファイル変換ツール。動画、音声、画像を瞬時に変換。サーバー不要・完全プライベート。",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#6366f1",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["utilities", "productivity"],
+  "lang": "ja",
+  "dir": "ltr",
+  "scope": "/",
+  "prefer_related_applications": false,
+  "screenshots": [
+    {
+      "src": "/screenshot.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "label": "Universal Converter メイン画面"
+    }
+  ],
+  "share_target": {
+    "action": "/",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "files": [
+        {
+          "name": "file",
+          "accept": ["image/*", "video/*", "audio/*", "application/pdf", "text/*"]
+        }
+      ]
+    }
+  },
+  "file_handlers": [
+    {
+      "action": "/",
+      "accept": {
+        "image/*": [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".avif"],
+        "video/*": [".mp4", ".webm", ".avi", ".mov", ".mkv"],
+        "audio/*": [".mp3", ".wav", ".ogg", ".aac", ".flac", ".m4a"]
+      }
+    }
+  ],
+  "launch_handler": {
+    "client_mode": "auto"
+  }
+}
